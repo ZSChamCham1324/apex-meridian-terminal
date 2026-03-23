@@ -83,6 +83,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .crypto-chg{font-size:13px;font-weight:500;width:64px;text-align:right;font-variant-numeric:tabular-nums}
 .crypto-chg.up{color:var(--green)}
 .crypto-chg.down{color:var(--red)}
+.crypto-badge{font-size:9px;font-weight:700;padding:2px 5px;border-radius:3px;margin-left:6px}
+.crypto-badge.crypto{background:rgba(255,159,0,0.15);color:#FFA500}
+.crypto-badge.stock{background:rgba(59,130,246,0.15);color:#60A5FA}
 
 /* Bottom nav */
 .bottom-nav{position:fixed;bottom:0;left:0;right:0;background:var(--bg);border-top:1px solid var(--separator);display:flex;justify-content:space-around;padding:8px 0 env(safe-area-inset-bottom,8px);z-index:200;max-width:500px;margin:0 auto}
@@ -200,6 +203,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 </div>
 
 <script>
+// Error tracking and logging
+const logger={
+  logs:[],maxLogs:100,
+  log:(type,msg,data)=>{
+    const entry={time:new Date().toISOString(),type,msg,data};
+    logger.logs.push(entry);
+    if(logger.logs.length>logger.maxLogs)logger.logs.shift();
+    if(type==='error'||type==='warn')console.warn(`[${type.toUpperCase()}] ${msg}`,data||'');
+  },
+  error:(msg,e)=>logger.log('error',msg,{error:e?.message,stack:e?.stack}),
+  warn:(msg)=>logger.log('warn',msg),
+  info:(msg,data)=>logger.log('info',msg,data)
+};
+window.addEventListener('error',e=>logger.error('Uncaught Error',e.error));
+window.addEventListener('unhandledrejection',e=>logger.error('Unhandled Rejection',e.reason));
+
 const TM={KXBTC:'Bitcoin',KXBTCD:'Bitcoin',KXETH:'Ethereum',KXETHD:'Ethereum',KXSOL:'Solana',KXSOLD:'Solana',KXXRP:'XRP',KXXRPD:'XRP',KXDOGE:'Dogecoin',KXDOGED:'Dogecoin',KXRECSSNBER:'Recession 2026',KXLARGECUT:'Fed Large Rate Cut',KXAISPIKE:'AI Capability Growth',KXCABLEAVE:'Trump Cabinet Leave',KXFEDMEET:'Fed Emergency Meeting',KXINXPOS:"S&P Positive 2026",KXWARSHNOM:'Warren Sherman Nom.'};
 
 function getAssetGroup(ticker){
@@ -392,6 +411,16 @@ const SYMS=['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT','DOGEUSDT'];
 const NAMES={BTCUSDT:['BTC','Bitcoin'],ETHUSDT:['ETH','Ethereum'],SOLUSDT:['SOL','Solana'],XRPUSDT:['XRP','XRP'],DOGEUSDT:['DOGE','Dogecoin']};
 let cryptoData={};
 
+// Stocks
+const STOCKS=['ORCL','MSFT','GOOGL','TSLA'];
+const STOCK_NAMES={
+  ORCL:['ORCL','Oracle'],
+  MSFT:['MSFT','Microsoft'],
+  GOOGL:['GOOGL','Google'],
+  TSLA:['TSLA','Tesla']
+};
+let stockData={},lastStockUpdate=0;
+
 async function fetchCrypto(){
   const urls=['https://api.binance.com/api/v3/ticker/24hr?symbols='+encodeURIComponent(JSON.stringify(SYMS)),
               'https://api.binance.us/api/v3/ticker/24hr?symbols='+encodeURIComponent(JSON.stringify(SYMS))];
@@ -401,20 +430,46 @@ async function fetchCrypto(){
       const data=await r.json();
       data.forEach(t=>{
         const [sym,name]=NAMES[t.symbol];
-        cryptoData[sym]={price:parseFloat(t.lastPrice),pct:parseFloat(t.priceChangePercent),name};
+        cryptoData[sym]={price:parseFloat(t.lastPrice),pct:parseFloat(t.priceChangePercent),name,type:'crypto'};
       });
       renderCrypto();return;
     }catch(e){}
   }
 }
 
+async function fetchStocks(){
+  for(const ticker of STOCKS){
+    try{
+      logger.info(`Fetching stock: ${ticker}`);
+      const r=await fetch('/api/stock?ticker='+ticker);
+      if(!r.ok){
+        logger.warn(`Stock API error for ${ticker}: ${r.status}`);
+        continue;
+      }
+      const data=await r.json();
+      const [sym,name]=STOCK_NAMES[ticker];
+      stockData[sym]={price:parseFloat(data.c),pct:parseFloat(data.dp),name,type:'stock'};
+      lastStockUpdate=Date.now();
+      renderCrypto();
+      logger.info(`Stock updated: ${ticker} = $${data.c} (${data.dp}%)`);
+    }catch(e){
+      const [sym,name]=STOCK_NAMES[ticker];
+      stockData[sym]={price:0,pct:0,name,type:'stock',error:true};
+      logger.error(`Failed to fetch stock ${ticker}`,e);
+    }
+  }
+}
+
 function renderCrypto(){
-  const html=Object.entries(cryptoData).map(([sym,d])=>{
+  const allData={...cryptoData,...stockData};
+  const html=Object.entries(allData).map(([sym,d])=>{
+    const type=d.type||'crypto';
+    if(d.error)return `<div class="crypto-row"><span class="crypto-sym">${sym}</span><span class="crypto-name">${d.name}<span class="crypto-badge ${type}">${type.toUpperCase()}</span></span><span class="crypto-price" style="color:var(--text3)">—</span></div>`;
     const pFmt=d.price>=100?'$'+Math.round(d.price).toLocaleString():'$'+d.price.toFixed(d.price>=1?2:4);
     const cls=d.pct>=0?'up':'down';
     return `<div class="crypto-row">
       <span class="crypto-sym">${sym}</span>
-      <span class="crypto-name">${d.name}</span>
+      <span class="crypto-name">${d.name}<span class="crypto-badge ${type}">${type.toUpperCase()}</span></span>
       <span class="crypto-price">${pFmt}</span>
       <span class="crypto-chg ${cls}">${d.pct>=0?'+':''}${d.pct.toFixed(2)}%</span>
     </div>`;
@@ -423,7 +478,9 @@ function renderCrypto(){
   $('cryptoFull').innerHTML=html;
 }
 
-fetchCrypto();setInterval(fetchCrypto,15000);
+fetchCrypto();fetchStocks();
+setInterval(fetchCrypto,15000);
+setInterval(fetchStocks,30000);
 
 async function loadData(){try{const r=await fetch('/data.json?'+Date.now());renderData(await r.json())}catch(e){}}
 
